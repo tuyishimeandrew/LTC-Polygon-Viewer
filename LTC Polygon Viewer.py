@@ -20,7 +20,7 @@ st.markdown(
     - Provide a **raw** GitHub URL to your Excel file (xlsx).
 
     Functionality:
-    - Shows only polygons whose KML `Name` first 4 characters match `FarmerCode` in the Excel.
+    - Shows only polygons whose KML `Name` first 8 characters match `FarmerCode` in the Excel.
     - Filter by Farmer Code (prefix), Village, or Group.
     - Map auto-zooms to the results and supports pan/zoom.
 
@@ -92,13 +92,13 @@ def prepare_data(_kml_gdf: gpd.GeoDataFrame, groups_df: pd.DataFrame):
 
     kg = _kml_gdf.copy()
     kg['Name'] = kg['Name'].astype(str)
-    kg['code4'] = kg['Name'].str[:4].str.upper().str.strip()
+    kg['code8'] = kg['Name'].str[:8].str.upper().str.strip()
 
     valid_codes = set(df[farmer_col])
-    kg = kg[kg['code4'].isin(valid_codes)].reset_index(drop=True)
+    kg = kg[kg['code8'].isin(valid_codes)].reset_index(drop=True)
 
-    # Merge on code4 -> farmer_col to attach group/village info to polygons
-    kg = kg.merge(df, left_on='code4', right_on=farmer_col, how='left', suffixes=(None, '_excel'))
+    # Merge on code8 -> farmer_col to attach group/village info to polygons
+    kg = kg.merge(df, left_on='code8', right_on=farmer_col, how='left', suffixes=(None, '_excel'))
 
     # Ensure CRS is WGS84
     if kg.crs is None:
@@ -125,8 +125,8 @@ def folium_map_for_gdf(gdf: gpd.GeoDataFrame, initial_zoom=12):
         except Exception:
             continue
         popup_html = f"<b>Name:</b> {row.get('Name','')}<br/>"
-        if 'code4' in row:
-            popup_html += f"<b>FarmerCode:</b> {row.get('code4','')}<br/>"
+        if 'code8' in row:
+            popup_html += f"<b>FarmerCode:</b> {row.get('code8','')}<br/>"
         # include common excel columns if present
         for c in ['Group', 'group', 'Village', 'village']:
             if c in row and pd.notna(row.get(c)):
@@ -210,7 +210,7 @@ group_sel = st.sidebar.selectbox('Select Group (optional)', options=['(any)'] + 
 # apply filters
 filtered = kg.copy()
 if search_code:
-    filtered = filtered[filtered['code4'].str.startswith(search_code)]
+    filtered = filtered[filtered['code8'].str.startswith(search_code)]
 if village_col and village_sel != '(any)':
     filtered = filtered[filtered[village_col].astype(str) == village_sel]
 if group_col and group_sel != '(any)':
@@ -233,4 +233,4 @@ else:
 
 # Footer
 st.markdown('---')
-st.markdown("**Notes:** The app matches the first 4 characters of the KML `Name` field to the Excel `FarmerCode`. If your KML has a different name field, update the code to use the correct property.")
+st.markdown("**Notes:** The app matches the first 8 characters of the KML `Name` field to the Excel `FarmerCode`. If your KML has a different name field, update the code to use the correct property.")
