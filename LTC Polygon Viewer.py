@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -29,6 +23,8 @@ st.markdown(
     - Shows only polygons whose KML `Name` first 4 characters match `FarmerCode` in the Excel.
     - Filter by Farmer Code (prefix), Village, or Group.
     - Map auto-zooms to the results and supports pan/zoom.
+
+    Note: this app is read-only and only intended for viewing polygons — there is no export or download functionality.
     """
 )
 
@@ -61,8 +57,12 @@ def read_kml_from_url(url: str) -> gpd.GeoDataFrame:
         gdf = gpd.read_file(tmp_path, driver='KML')
     except Exception:
         gdf = gpd.read_file(tmp_path)
+    # Some KMLs use lowercase 'name'
     if 'Name' not in gdf.columns and 'name' in gdf.columns:
         gdf = gdf.rename(columns={'name': 'Name'})
+    # Ensure Name exists
+    if 'Name' not in gdf.columns:
+        gdf['Name'] = gdf.index.astype(str)
     gdf['Name'] = gdf['Name'].astype(str)
     return gdf
 
@@ -97,8 +97,10 @@ def prepare_data(kml_gdf: gpd.GeoDataFrame, groups_df: pd.DataFrame):
     valid_codes = set(df[farmer_col])
     kg = kg[kg['code4'].isin(valid_codes)].reset_index(drop=True)
 
+    # Merge on code4 -> farmer_col to attach group/village info to polygons
     kg = kg.merge(df, left_on='code4', right_on=farmer_col, how='left', suffixes=(None, '_excel'))
 
+    # Ensure CRS is WGS84
     if kg.crs is None:
         kg = kg.set_crs('epsg:4326')
     else:
@@ -122,19 +124,20 @@ def folium_map_for_gdf(gdf: gpd.GeoDataFrame, initial_zoom=12):
             geo_json = mapping(row.geometry)
         except Exception:
             continue
-        popup_html = f"<b>Name:</b> {row.get('Name','')}<br>"
+        popup_html = f"<b>Name:</b> {row.get('Name','')}<br/>"
         if 'code4' in row:
-            popup_html += f"<b>FarmerCode:</b> {row.get('code4','')}<br>"
+            popup_html += f"<b>FarmerCode:</b> {row.get('code4','')}<br/>"
+        # include common excel columns if present
         for c in ['Group', 'group', 'Village', 'village']:
-            if c in row:
-                popup_html += f"<b>{c}:</b> {row.get(c,'')}<br>"
+            if c in row and pd.notna(row.get(c)):
+                popup_html += f"<b>{c}:</b> {row.get(c)}<br/>"
         folium.GeoJson(
             geo_json,
             name=str(idx),
             tooltip=row.get('Name',''),
             style_function=lambda feature: {
                 'fillColor': '#ffff66',
-                'color': '#0000ff',
+                'color': '#0000ff',  # blue boundary
                 'weight': 2,
                 'fillOpacity': 0.3,
             },
@@ -173,7 +176,7 @@ except Exception as e:
     st.error(f'Error preparing data: {e}')
     st.stop()
 
-show_sample = st.sidebar.checkbox('Show sample of uploaded data (first rows)')
+show_sample = st.sidebar.checkbox('Show sample of data (first rows)')
 if show_sample:
     st.subheader('KML polygons (sample)')
     st.write(kg.head())
@@ -224,14 +227,4 @@ else:
 
 # Footer
 st.markdown('---')
-st.markdown(
-    "**Notes:** The app matches the first 4 characters of the KML `Name` field to the Excel `FarmerCode`.
-"
-    "If your KML has a different name field, adjust the code to use the correct property.
-"
-)
-
-if len(filtered) > 0:
-    csv_out = filtered.drop(columns='geometry').to_csv(index=False)
-    st.download_button('Download filtered table (CSV)', data=csv_out, file_name='filtered_polygons.csv')
-
+st.markdown("**Notes:** The app matches the first 4 characters of the KML `Name` field to the Excel `FarmerCode`. If your KML has a different name field, update the code to use the correct property.")
