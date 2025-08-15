@@ -133,10 +133,11 @@ def _count_coords(geom):
 
 
 @st.cache_data
-def simplify_geometries(_kg: gpd.GeoDataFrame, high_perf: bool):
-    """Return a copy of _kg with geometries simplified if high_perf is True, and set active geometry to 'geometry_simp'."""
+def add_geometries(_kg: gpd.GeoDataFrame, simplify_enabled: bool):
+    """Return a copy of _kg with 'original_geometry' and 'simplified_geometry' columns."""
     kg = _kg.copy()
-    if high_perf:
+    kg['original_geometry'] = kg.geometry
+    if simplify_enabled:
         # estimate complexity
         total_coords = sum(_count_coords(geom) for geom in kg.geometry)
 
@@ -151,20 +152,19 @@ def simplify_geometries(_kg: gpd.GeoDataFrame, high_perf: bool):
             tol = 0.0
 
         if tol > 0.0:
-            kg['geometry_simp'] = kg.geometry.simplify(tolerance=tol, preserve_topology=True)
+            kg['simplified_geometry'] = kg.geometry.simplify(tolerance=tol, preserve_topology=True)
         else:
-            kg['geometry_simp'] = kg.geometry
+            kg['simplified_geometry'] = kg.geometry
     else:
-        kg['geometry_simp'] = kg.geometry
+        kg['simplified_geometry'] = kg.geometry
 
-    # Drop original geometry to avoid serialization issues
+    # Drop original geometry to avoid confusion, use the two new columns
     kg = kg.drop(columns=['geometry'])
-    kg = kg.set_geometry('geometry_simp')
     return kg
 
 
 def folium_map_for_gdf(gdf: gpd.GeoDataFrame, popup_fields=None, initial_zoom=12):
-    """Render a folium Map from a GeoDataFrame. Expects a precomputed 'geometry_simp' column for fast rendering."""
+    """Render a folium Map from a GeoDataFrame using active geometry."""
     if len(gdf) == 0:
         m = folium.Map(location=[0,0], zoom_start=2)
         return m
@@ -236,8 +236,8 @@ _raw_base = "https://raw.githubusercontent.com/tuyishimeandrew/LTC-Polygon-Viewe
 _kml_default = f"{_raw_base}/SurveyCTO%20Inspection%20Polygons.kml"
 _excel_default = f"{_raw_base}/Group%20Polygons.xlsx"
 
-kml_url = st.sidebar.text_input('KML raw URL (e.g. https://raw.githubusercontent.com/your/repo/main/SurveyCTO Inspection Polygons.kml)', value=_kml_default)
-excel_url = st.sidebar.text_input('Excel raw URL (e.g. https://raw.githubusercontent.com/your/repo/main/Group Polygons.xlsx)', value=_excel_default)
+kml_url = st.sidebar.text_input('KML raw URL', value=_kml_default)
+excel_url = st.sidebar.text_input('Excel raw URL', value=_excel_default)
 
 st.sidebar.markdown('---')
 st.sidebar.markdown('**Tips:** Use the GitHub *raw* URL (click Raw on the file page). For private repos you must provide a link that your server can access.')
@@ -262,9 +262,10 @@ except Exception as e:
 
 # Performance mode: enable automatic simplification for faster map rendering
 st.sidebar.markdown('---')
-high_perf = st.sidebar.checkbox('Enable high-performance mode (auto-simplify geometries for faster display)', value=True)
-# Simplify geometries according to performance setting (cached)
-kg = simplify_geometries(kg, high_perf)
+simplify_enabled = st.sidebar.checkbox('Enable geometry simplification (faster display, approximate coordinates)', value=True)
+use_simplified = st.sidebar.checkbox('Use simplified coordinates (toggle to switch to actual)', value=simplify_enabled)
+# Add geometries (cached)
+kg = add_geometries(kg, simplify_enabled)
 
 # prepare popup fields (include farmer_col and common columns if present)
 popup_fields = ['Name', 'code8']
@@ -283,7 +284,11 @@ if show_sample:
 
 # Filters
 st.sidebar.header('Filter results')
-search_code = st.sidebar.text_input('Search Farmer Code (type prefix or full code)', '').strip().upper()
+
+# Get unique farmer codes for selectbox
+unique_codes = sorted(kg['code8'].unique())
+search_code = st.sidebar.selectbox('Select Farmer Code (type to search and filter options)', options=['(any)'] + unique_codes)
+search_code = '' if search_code == '(any)' else search_code
 
 village_col = None
 group_col = None
@@ -310,8 +315,13 @@ if group_col and group_sel != '(any)':
 
 st.sidebar.markdown(f"Matching polygons: **{len(filtered)}**")
 
+# Show matching farmer codes if searching
+if search_code:
+    matching_codes = sorted(filtered['code8'].unique())
+    with st.sidebar.expander(f"Matching Farmer Codes ({len(matching_codes)})"):
+        st.write(", ".join(matching_codes))
+
 # Map display
-st.subheader('Map view')
 # If no polygons in the processed set, show a clear message
 if kg is None or len(kg) == 0:
     st.warning('No polygons available to display from the provided files.')
@@ -323,9 +333,15 @@ else:
     else:
         display_gdf = filtered
 
-    # Render the map (uses simplified geometries for speed)
+    # Set geometry based on toggle
+    if use_simplified and simplify_enabled:
+        display_gdf = display_gdf.set_geometry('simplified_geometry')
+    else:
+        display_gdf = display_gdf.set_geometry('original_geometry')
+
+    # Render the map
     m = folium_map_for_gdf(display_gdf, popup_fields=popup_fields)
-    st_folium(m, width=1000, height=700)
+    st_folium(m, width="100%", height=800)
 
 # Footer
 st.markdown('---')
