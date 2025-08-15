@@ -8,7 +8,7 @@ import tempfile
 import requests
 import io
 
-st.set_page_config(layout="wide", page_title="Farm Polygon Viewer")
+st.set_page_config(layout="wide", page_title="Latitude Farm Polygon Viewer")
 
 st.title("Farm Polygon Viewer")
 
@@ -159,10 +159,6 @@ for c in ['Village', 'village', 'Group', 'group']:
 
 st.sidebar.header('Filters')
 
-unique_codes = sorted(kg['code8'].unique())
-search_code = st.sidebar.selectbox('Farmer Code', options=['(any)'] + unique_codes)
-search_code = '' if search_code == '(any)' else search_code
-
 village_col = None
 group_col = None
 for c in df_excel.columns:
@@ -178,19 +174,10 @@ village_sel = st.sidebar.selectbox('Village', options=['(any)'] + villages)
 group_sel = st.sidebar.selectbox('Group', options=['(any)'] + groups)
 
 filtered = kg.copy()
-if search_code:
-    filtered = filtered[filtered['code8'].str.startswith(search_code)]
 if village_col and village_sel != '(any)':
     filtered = filtered[filtered[village_col].astype(str) == village_sel]
 if group_col and group_sel != '(any)':
     filtered = filtered[filtered[group_col].astype(str) == group_sel]
-
-
-
-if search_code:
-    matching_codes = sorted(filtered['code8'].unique())
-    with st.sidebar.expander(f"Matching Farmer Codes ({len(matching_codes)})"):
-        st.write(", ".join(matching_codes))
 
 if len(kg) == 0:
     st.warning('No polygons available.')
