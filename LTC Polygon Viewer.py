@@ -134,48 +134,40 @@ def _count_coords(geom):
 
 @st.cache_data
 def simplify_geometries(_kg: gpd.GeoDataFrame, high_perf: bool):
-    """Return a copy of _kg with a 'geometry_simp' column. Uses auto tolerance based on vertex count when high_perf is True."""
+    """Return a copy of _kg with geometries simplified if high_perf is True, and set active geometry to 'geometry_simp'."""
     kg = _kg.copy()
-    if not high_perf:
-        kg['geometry_simp'] = kg.geometry
-        return kg
+    if high_perf:
+        # estimate complexity
+        total_coords = sum(_count_coords(geom) for geom in kg.geometry)
 
-    # estimate complexity
-    total_coords = 0
-    for geom in kg.geometry:
-        total_coords += _count_coords(geom)
+        # choose tolerance heuristically (degrees). These are conservative defaults.
+        if total_coords > 20000:
+            tol = 0.0005
+        elif total_coords > 5000:
+            tol = 0.0001
+        elif total_coords > 1000:
+            tol = 0.00002
+        else:
+            tol = 0.0
 
-    # choose tolerance heuristically (degrees). These are conservative defaults.
-    if total_coords > 20000:
-        tol = 0.0005
-    elif total_coords > 5000:
-        tol = 0.0001
-    elif total_coords > 1000:
-        tol = 0.00002
-    else:
-        tol = 0.0
-
-    if tol > 0.0:
-        kg['geometry_simp'] = kg.geometry.simplify(tolerance=tol, preserve_topology=True)
+        if tol > 0.0:
+            kg['geometry_simp'] = kg.geometry.simplify(tolerance=tol, preserve_topology=True)
+        else:
+            kg['geometry_simp'] = kg.geometry
     else:
         kg['geometry_simp'] = kg.geometry
+
+    # Drop original geometry to avoid serialization issues
+    kg = kg.drop(columns=['geometry'])
+    kg = kg.set_geometry('geometry_simp')
     return kg
 
 
-import numpy as np
-
 def folium_map_for_gdf(gdf: gpd.GeoDataFrame, popup_fields=None, initial_zoom=12):
-    """Render a folium Map from a GeoDataFrame. Expects a precomputed 'geometry_simp' column for fast rendering.
-
-    Builds a proper GeoJSON FeatureCollection using shapely.geometry.mapping so there are
-    no raw geometry objects left for the JSON encoder to trip on.
-    """
+    """Render a folium Map from a GeoDataFrame. Expects a precomputed 'geometry_simp' column for fast rendering."""
     if len(gdf) == 0:
         m = folium.Map(location=[0,0], zoom_start=2)
         return m
-    # use simplified geometry column if present
-    if 'geometry_simp' in gdf.columns:
-        gdf = gdf.set_geometry('geometry_simp')
 
     bounds = gdf.total_bounds  # minx, miny, maxx, maxy
     minx, miny, maxx, maxy = bounds
@@ -187,42 +179,9 @@ def folium_map_for_gdf(gdf: gpd.GeoDataFrame, popup_fields=None, initial_zoom=12
     if popup_fields is None:
         popup_fields = ['Name', 'code8']
 
-    # Build a GeoJSON FeatureCollection using mapping(...) for geometries and plain Python types for properties
-    features = []
-    geom_col = gdf.geometry.name
-    for _, row in gdf.iterrows():
-        geom = row.geometry
-        if geom is None:
-            continue
-        geom_json = mapping(geom)
-        # properties: all columns except geometry
-        props = {}
-        for c in gdf.columns:
-            if c == geom_col:
-                continue
-            v = row.get(c)
-            if pd.isna(v):
-                props[c] = None
-            else:
-                # convert numpy scalars to Python scalars
-                try:
-                    if hasattr(v, 'item'):
-                        props[c] = v.item()
-                    else:
-                        props[c] = v
-                except Exception:
-                    props[c] = str(v)
-        features.append({
-            'type': 'Feature',
-            'geometry': geom_json,
-            'properties': props
-        })
-
-    geojson = { 'type': 'FeatureCollection', 'features': features }
-
     try:
         gj = folium.GeoJson(
-            geojson,
+            gdf.__geo_interface__,
             name='polygons',
             tooltip=folium.GeoJsonTooltip(fields=['Name'], aliases=['Name:']),
             style_function=lambda feature: {
@@ -233,22 +192,35 @@ def folium_map_for_gdf(gdf: gpd.GeoDataFrame, popup_fields=None, initial_zoom=12
             },
         )
         # Attach popup if fields exist in properties
-        existing_fields = [f for f in (popup_fields or []) if f in gdf.columns]
+        existing_fields = [f for f in popup_fields if f in gdf.columns]
         if existing_fields:
             gj.add_child(folium.features.GeoJsonPopup(fields=existing_fields, labels=True, localize=True, parse_html=False))
         gj.add_to(m)
     except Exception:
-        # fallback to adding features one-by-one (shouldn't normally happen now)
-        for feat in features:
+        # fallback to adding features one-by-one (slower)
+        for idx, row in gdf.iterrows():
+            try:
+                geo_json = mapping(row.geometry)
+            except Exception:
+                continue
+            popup_html = f"<b>Name:</b> {row.get('Name','')}<br/>"
+            if 'code8' in row:
+                popup_html += f"<b>FarmerCode:</b> {row.get('code8','')}<br/>"
+            for c in ['Group', 'group', 'Village', 'village']:
+                if c in row and pd.notna(row.get(c)):
+                    popup_html += f"<b>{c}:</b> {row.get(c)}<br/>"
             folium.GeoJson(
-                feat,
+                geo_json,
+                name=str(idx),
+                tooltip=row.get('Name',''),
                 style_function=lambda feature: {
                     'fillColor': '#ffff66',
                     'color': '#0000ff',
                     'weight': 2,
                     'fillOpacity': 0.3,
                 },
-                popup=folium.Popup(str(feat.get('properties', {})), max_width=300)
+                highlight_function=lambda x: {'weight':3, 'color':'green'},
+                popup=folium.Popup(popup_html, max_width=300)
             ).add_to(m)
 
     padding = 0.01
