@@ -8,7 +8,7 @@ import tempfile
 import requests
 import io
 
-st.set_page_config(layout="wide", page_title="Latitude Farm Polygon Viewer")
+st.set_page_config(layout="wide", page_title="Farm Polygon Viewer")
 
 st.title("Farm Polygon Viewer")
 
@@ -133,18 +133,9 @@ def folium_map_for_gdf(gdf: gpd.GeoDataFrame, popup_fields=None, initial_zoom=12
     m.fit_bounds([[miny - padding, minx - padding], [maxy + padding, maxx + padding]])
     return m
 
-st.sidebar.header("GitHub raw URLs")
-
 _raw_base = "https://raw.githubusercontent.com/tuyishimeandrew/LTC-Polygon-Viewer/main"
-_kml_default = f"{_raw_base}/SurveyCTO%20Inspection%20Polygons.kml"
-_excel_default = f"{_raw_base}/Group%20Polygons.xlsx"
-
-kml_url = st.sidebar.text_input('KML raw URL', value=_kml_default)
-excel_url = st.sidebar.text_input('Excel raw URL', value=_excel_default)
-
-if not kml_url or not excel_url:
-    st.info('Please provide both URLs.')
-    st.stop()
+kml_url = f"{_raw_base}/SurveyCTO%20Inspection%20Polygons.kml"
+excel_url = f"{_raw_base}/Group%20Polygons.xlsx"
 
 try:
     kml_gdf = read_kml_from_url(kml_url)
