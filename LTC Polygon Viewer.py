@@ -106,13 +106,129 @@ def prepare_data(_kml_gdf: gpd.GeoDataFrame, groups_df: pd.DataFrame):
     else:
         kg = kg.to_crs(epsg=4326)
 
+    # do not simplify here — simplification happens later (user can toggle performance mode)
     return kg, df, farmer_col
 
 
-def folium_map_for_gdf(gdf: gpd.GeoDataFrame, initial_zoom=12):
+def _count_coords(geom):
+    """Count number of coordinate tuples in a geometry (handles Multi* and Polygons)."""
+    if geom is None:
+        return 0
+    geom_type = getattr(geom, 'geom_type', None)
+    if geom_type == 'Polygon':
+        c = len(geom.exterior.coords)
+        for interior in geom.interiors:
+            c += len(interior.coords)
+        return c
+    if geom_type and geom_type.startswith('Multi'):
+        total = 0
+        for part in geom.geoms:
+            total += _count_coords(part)
+        return total
+    # fallback: try coords
+    try:
+        return len(list(geom.coords))
+    except Exception:
+        return 0
+
+
+@st.cache_data
+def simplify_geometries(_kg: gpd.GeoDataFrame, high_perf: bool):
+    """Return a copy of _kg with a 'geometry_simp' column. Uses auto tolerance based on vertex count when high_perf is True."""
+    kg = _kg.copy()
+    if not high_perf:
+        kg['geometry_simp'] = kg.geometry
+        return kg
+
+    # estimate complexity
+    total_coords = 0
+    for geom in kg.geometry:
+        total_coords += _count_coords(geom)
+
+    # choose tolerance heuristically (degrees). These are conservative defaults.
+    if total_coords > 20000:
+        tol = 0.0005
+    elif total_coords > 5000:
+        tol = 0.0001
+    elif total_coords > 1000:
+        tol = 0.00002
+    else:
+        tol = 0.0
+
+    if tol > 0.0:
+        kg['geometry_simp'] = kg.geometry.simplify(tolerance=tol, preserve_topology=True)
+    else:
+        kg['geometry_simp'] = kg.geometry
+    return kg
+
+
+def folium_map_for_gdf(gdf: gpd.GeoDataFrame, popup_fields=None, initial_zoom=12):
+    """Render a folium Map from a GeoDataFrame. Expects a precomputed 'geometry_simp' column for fast rendering."""
     if len(gdf) == 0:
         m = folium.Map(location=[0,0], zoom_start=2)
         return m
+    # use simplified geometry column if present
+    if 'geometry_simp' in gdf.columns:
+        gdf = gdf.set_geometry('geometry_simp')
+
+    bounds = gdf.total_bounds  # minx, miny, maxx, maxy
+    minx, miny, maxx, maxy = bounds
+    center_lat = (miny + maxy) / 2
+    center_lon = (minx + maxx) / 2
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=initial_zoom)
+
+    # Create popup configuration (fast: use GeoJsonPopup with fields)
+    if popup_fields is None:
+        popup_fields = ['Name', 'code8']
+
+    try:
+        gj = folium.GeoJson(
+            gdf.__geo_interface__,
+            name='polygons',
+            tooltip=folium.GeoJsonTooltip(fields=['Name'], aliases=['Name:']),
+            style_function=lambda feature: {
+                'fillColor': '#ffff66',
+                'color': '#0000ff',
+                'weight': 2,
+                'fillOpacity': 0.3,
+            },
+        )
+        # Attach popup if fields exist in properties
+        existing_fields = [f for f in popup_fields if f in gdf.columns]
+        if existing_fields:
+            gj.add_child(folium.features.GeoJsonPopup(fields=existing_fields, labels=True, localize=True, parse_html=False))
+        gj.add_to(m)
+    except Exception:
+        # fallback to adding features one-by-one (slower)
+        for idx, row in gdf.iterrows():
+            try:
+                geo_json = mapping(row.geometry)
+            except Exception:
+                continue
+            popup_html = f"<b>Name:</b> {row.get('Name','')}<br/>"
+            if 'code8' in row:
+                popup_html += f"<b>FarmerCode:</b> {row.get('code8','')}<br/>"
+            for c in ['Group', 'group', 'Village', 'village']:
+                if c in row and pd.notna(row.get(c)):
+                    popup_html += f"<b>{c}:</b> {row.get(c)}<br/>"
+            folium.GeoJson(
+                geo_json,
+                name=str(idx),
+                tooltip=row.get('Name',''),
+                style_function=lambda feature: {
+                    'fillColor': '#ffff66',
+                    'color': '#0000ff',
+                    'weight': 2,
+                    'fillOpacity': 0.3,
+                },
+                highlight_function=lambda x: {'weight':3, 'color':'green'},
+                popup=folium.Popup(popup_html, max_width=300)
+            ).add_to(m)
+
+    padding = 0.01
+    m.fit_bounds([[miny - padding, minx - padding], [maxy + padding, maxx + padding]])
+
+    return m
     bounds = gdf.total_bounds  # minx, miny, maxx, maxy
     minx, miny, maxx, maxy = bounds
     center_lat = (miny + maxy) / 2
@@ -182,6 +298,20 @@ except Exception as e:
     st.error(f'Error preparing data: {e}')
     st.stop()
 
+# Performance mode: enable automatic simplification for faster map rendering
+st.sidebar.markdown('---')
+high_perf = st.sidebar.checkbox('Enable high-performance mode (auto-simplify geometries for faster display)', value=True)
+# Simplify geometries according to performance setting (cached)
+kg = simplify_geometries(kg, high_perf)
+
+# prepare popup fields (include farmer_col and common columns if present)
+popup_fields = ['Name', 'code8']
+if farmer_col and farmer_col in df_excel.columns:
+    popup_fields.append(farmer_col)
+for c in ['Village', 'village', 'Group', 'group']:
+    if c in df_excel.columns and c not in popup_fields:
+        popup_fields.append(c)
+
 show_sample = st.sidebar.checkbox('Show sample of data (first rows)')
 if show_sample:
     st.subheader('KML polygons (sample)')
@@ -220,15 +350,19 @@ st.sidebar.markdown(f"Matching polygons: **{len(filtered)}**")
 
 # Map display
 st.subheader('Map view')
-if len(filtered) == 0:
-    st.warning('No polygons match the current filters.')
-    show_all = st.button('Show all available polygons')
-    if show_all:
-        m_all = folium_map_for_gdf(kg)
-        st_folium(m_all, width=1000, height=700)
+# If no polygons in the processed set, show a clear message
+if kg is None or len(kg) == 0:
+    st.warning('No polygons available to display from the provided files.')
 else:
-    m = folium_map_for_gdf(filtered)
-    folium.LayerControl().add_to(m)
+    # If filters produce zero results, show all available polygons by default (fast UX)
+    if len(filtered) == 0:
+        st.info('No filters matched — showing all available polygons.')
+        display_gdf = kg
+    else:
+        display_gdf = filtered
+
+    # Render the map (uses simplified geometries for speed)
+    m = folium_map_for_gdf(display_gdf, popup_fields=popup_fields)
     st_folium(m, width=1000, height=700)
 
 # Footer
