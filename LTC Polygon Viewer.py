@@ -185,7 +185,7 @@ if village_col and village_sel != '(any)':
 if group_col and group_sel != '(any)':
     filtered = filtered[filtered[group_col].astype(str) == group_sel]
 
-st.sidebar.markdown(f"Matching polygons: **{len(filtered)}**")
+
 
 if search_code:
     matching_codes = sorted(filtered['code8'].unique())
