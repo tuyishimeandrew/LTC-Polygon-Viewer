@@ -8,7 +8,7 @@ import tempfile
 import requests
 import io
 
-st.set_page_config(layout="wide", page_title="Farm Polygon Viewer")
+st.set_page_config(layout="wide", page_title="Latitude Farm Polygon Viewer")
 
 st.title("Farm Polygon Viewer")
 
