@@ -76,7 +76,7 @@ def read_excel_from_url(url: str) -> pd.DataFrame:
     return df
 
 @st.cache_data
-def prepare_data(kml_gdf: gpd.GeoDataFrame, groups_df: pd.DataFrame):
+def prepare_data(_kml_gdf: gpd.GeoDataFrame, groups_df: pd.DataFrame):
     df = groups_df.copy()
     # find FarmerCode column (case-insensitive)
     farmer_col = None
@@ -90,7 +90,7 @@ def prepare_data(kml_gdf: gpd.GeoDataFrame, groups_df: pd.DataFrame):
 
     df[farmer_col] = df[farmer_col].astype(str).str.upper().str.strip()
 
-    kg = kml_gdf.copy()
+    kg = _kml_gdf.copy()
     kg['Name'] = kg['Name'].astype(str)
     kg['code4'] = kg['Name'].str[:4].str.upper().str.strip()
 
