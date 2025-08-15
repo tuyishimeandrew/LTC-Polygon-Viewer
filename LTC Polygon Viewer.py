@@ -162,8 +162,14 @@ def simplify_geometries(_kg: gpd.GeoDataFrame, high_perf: bool):
     return kg
 
 
+import numpy as np
+
 def folium_map_for_gdf(gdf: gpd.GeoDataFrame, popup_fields=None, initial_zoom=12):
-    """Render a folium Map from a GeoDataFrame. Expects a precomputed 'geometry_simp' column for fast rendering."""
+    """Render a folium Map from a GeoDataFrame. Expects a precomputed 'geometry_simp' column for fast rendering.
+
+    Builds a proper GeoJSON FeatureCollection using shapely.geometry.mapping so there are
+    no raw geometry objects left for the JSON encoder to trip on.
+    """
     if len(gdf) == 0:
         m = folium.Map(location=[0,0], zoom_start=2)
         return m
@@ -181,9 +187,42 @@ def folium_map_for_gdf(gdf: gpd.GeoDataFrame, popup_fields=None, initial_zoom=12
     if popup_fields is None:
         popup_fields = ['Name', 'code8']
 
+    # Build a GeoJSON FeatureCollection using mapping(...) for geometries and plain Python types for properties
+    features = []
+    geom_col = gdf.geometry.name
+    for _, row in gdf.iterrows():
+        geom = row.geometry
+        if geom is None:
+            continue
+        geom_json = mapping(geom)
+        # properties: all columns except geometry
+        props = {}
+        for c in gdf.columns:
+            if c == geom_col:
+                continue
+            v = row.get(c)
+            if pd.isna(v):
+                props[c] = None
+            else:
+                # convert numpy scalars to Python scalars
+                try:
+                    if hasattr(v, 'item'):
+                        props[c] = v.item()
+                    else:
+                        props[c] = v
+                except Exception:
+                    props[c] = str(v)
+        features.append({
+            'type': 'Feature',
+            'geometry': geom_json,
+            'properties': props
+        })
+
+    geojson = { 'type': 'FeatureCollection', 'features': features }
+
     try:
         gj = folium.GeoJson(
-            gdf.__geo_interface__,
+            geojson,
             name='polygons',
             tooltip=folium.GeoJsonTooltip(fields=['Name'], aliases=['Name:']),
             style_function=lambda feature: {
@@ -194,72 +233,23 @@ def folium_map_for_gdf(gdf: gpd.GeoDataFrame, popup_fields=None, initial_zoom=12
             },
         )
         # Attach popup if fields exist in properties
-        existing_fields = [f for f in popup_fields if f in gdf.columns]
+        existing_fields = [f for f in (popup_fields or []) if f in gdf.columns]
         if existing_fields:
             gj.add_child(folium.features.GeoJsonPopup(fields=existing_fields, labels=True, localize=True, parse_html=False))
         gj.add_to(m)
     except Exception:
-        # fallback to adding features one-by-one (slower)
-        for idx, row in gdf.iterrows():
-            try:
-                geo_json = mapping(row.geometry)
-            except Exception:
-                continue
-            popup_html = f"<b>Name:</b> {row.get('Name','')}<br/>"
-            if 'code8' in row:
-                popup_html += f"<b>FarmerCode:</b> {row.get('code8','')}<br/>"
-            for c in ['Group', 'group', 'Village', 'village']:
-                if c in row and pd.notna(row.get(c)):
-                    popup_html += f"<b>{c}:</b> {row.get(c)}<br/>"
+        # fallback to adding features one-by-one (shouldn't normally happen now)
+        for feat in features:
             folium.GeoJson(
-                geo_json,
-                name=str(idx),
-                tooltip=row.get('Name',''),
+                feat,
                 style_function=lambda feature: {
                     'fillColor': '#ffff66',
                     'color': '#0000ff',
                     'weight': 2,
                     'fillOpacity': 0.3,
                 },
-                highlight_function=lambda x: {'weight':3, 'color':'green'},
-                popup=folium.Popup(popup_html, max_width=300)
+                popup=folium.Popup(str(feat.get('properties', {})), max_width=300)
             ).add_to(m)
-
-    padding = 0.01
-    m.fit_bounds([[miny - padding, minx - padding], [maxy + padding, maxx + padding]])
-
-    return m
-    bounds = gdf.total_bounds  # minx, miny, maxx, maxy
-    minx, miny, maxx, maxy = bounds
-    center_lat = (miny + maxy) / 2
-    center_lon = (minx + maxx) / 2
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=initial_zoom)
-
-    for idx, row in gdf.iterrows():
-        try:
-            geo_json = mapping(row.geometry)
-        except Exception:
-            continue
-        popup_html = f"<b>Name:</b> {row.get('Name','')}<br/>"
-        if 'code8' in row:
-            popup_html += f"<b>FarmerCode:</b> {row.get('code8','')}<br/>"
-        # include common excel columns if present
-        for c in ['Group', 'group', 'Village', 'village']:
-            if c in row and pd.notna(row.get(c)):
-                popup_html += f"<b>{c}:</b> {row.get(c)}<br/>"
-        folium.GeoJson(
-            geo_json,
-            name=str(idx),
-            tooltip=row.get('Name',''),
-            style_function=lambda feature: {
-                'fillColor': '#ffff66',
-                'color': '#0000ff',  # blue boundary
-                'weight': 2,
-                'fillOpacity': 0.3,
-            },
-            highlight_function=lambda x: {'weight':3, 'color':'green'},
-            popup=folium.Popup(popup_html, max_width=300)
-        ).add_to(m)
 
     padding = 0.01
     m.fit_bounds([[miny - padding, minx - padding], [maxy + padding, maxx + padding]])
