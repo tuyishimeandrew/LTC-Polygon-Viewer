@@ -10,7 +10,7 @@ import io
 
 st.set_page_config(layout="wide", page_title="Latitude Farm Polygon Viewer")
 
-st.title("Farm Polygon Viewer")
+st.title("Latitude Farm Polygon Viewer")
 
 @st.cache_data
 def download_file_to_temp(url: str) -> str:
