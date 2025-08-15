@@ -152,8 +152,14 @@ def folium_map_for_gdf(gdf: gpd.GeoDataFrame, initial_zoom=12):
 
 # ----------------- Sidebar (GitHub-only) -----------------
 st.sidebar.header("GitHub raw URLs (required)")
-kml_url = st.sidebar.text_input('KML raw URL (e.g. https://raw.githubusercontent.com/your/repo/main/SurveyCTO Inspection Polygons.kml)')
-excel_url = st.sidebar.text_input('Excel raw URL (e.g. https://raw.githubusercontent.com/your/repo/main/Group Polygons.xlsx)')
+
+# Auto-populated raw URLs for your repo (you can overwrite these if you move files)
+_raw_base = "https://raw.githubusercontent.com/tuyishimeandrew/LTC-Polygon-Viewer/main"
+_kml_default = f"{_raw_base}/SurveyCTO%20Inspection%20Polygons.kml"
+_excel_default = f"{_raw_base}/Group%20Polygons.xlsx"
+
+kml_url = st.sidebar.text_input('KML raw URL (e.g. https://raw.githubusercontent.com/your/repo/main/SurveyCTO Inspection Polygons.kml)', value=_kml_default)
+excel_url = st.sidebar.text_input('Excel raw URL (e.g. https://raw.githubusercontent.com/your/repo/main/Group Polygons.xlsx)', value=_excel_default)
 
 st.sidebar.markdown('---')
 st.sidebar.markdown('**Tips:** Use the GitHub *raw* URL (click Raw on the file page). For private repos you must provide a link that your server can access.')
